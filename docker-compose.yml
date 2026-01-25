@@ -32,8 +32,11 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./app.py:/app/app.py:ro
+      - ./instructions.md:/app/instructions.md:ro
 
   # Optional: pgAdmin for database management
   pgadmin:

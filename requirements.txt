@@ -1,20 +1,12 @@
-# StoreSace Analytics - Python Dependencies
-
-# Core
-streamlit>=1.31.0
-pandas>=2.2.0
-numpy>=1.26.0
-
-# Database
-psycopg2-binary>=2.9.9
-
-# LLM Providers
-requests>=2.31.0       # For OpenRouter and Ollama HTTP APIs
-
-# Utilities
-python-dotenv>=1.0.0   # Environment variables
-sqlparse>=0.5.0        # SQL formatting/validation
-
-# Optional - for advanced features
-plotly>=5.18.0         # Better charts
-altair>=5.2.0          # Alternative charts
+streamlit==1.40.0
+psycopg2-binary==2.9.10
+pandas==2.2.3
+requests==2.32.3
+python-dotenv==1.0.1
+plotly==5.24.1
+# v2 Multi-Agent dependencies
+langgraph==0.2.60
+langchain==0.3.14
+langchain-anthropic==0.3.1
+langchain-community==0.3.14
+tavily-python==0.5.0

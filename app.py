@@ -30,13 +30,29 @@ class Config:
     # LLM
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "claude")  # 'claude' or 'ollama'
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-    OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 
     # App
     APP_TITLE = os.getenv("APP_TITLE", "StoreSace Analytics")
     APP_ICON = os.getenv("APP_ICON", "📊")
+    APP_TITLE = os.getenv("APP_TITLE", "StoreSace Analytics")
+    APP_ICON = os.getenv("APP_ICON", "📊")
     DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+
+
+def get_ai_instructions() -> str:
+    """Load custom AI instructions from file"""
+    try:
+        with open("instructions.md", "r", encoding="utf-8") as f:
+            content = f.read()
+            if not content.strip():
+                st.warning("instructions.md is empty. Using minimal defaults.")
+                return "# Minimal Instructions\n- PostgreSQL database\n- Only SELECT queries\n- Use prod_515383678 schema"
+            return content
+    except FileNotFoundError:
+        st.error("instructions.md not found. Create it with database schema documentation.")
+        st.stop()
 
 
 # ============================================================================
@@ -92,73 +108,19 @@ def claude_text_to_sql(question: str) -> str:
         st.error("OPENROUTER_API_KEY not set in environment")
         st.stop()
 
-    # System prompt with schema context
-    system_prompt = f"""You are a SQL expert for a Portuguese retail database.
+    # Load comprehensive instructions from file
+    instructions = get_ai_instructions()
 
-Database Schema (search_path: {Config.DB_SCHEMA}):
+    system_prompt = f"""You are a PostgreSQL expert converting natural language to SQL queries.
 
-**stores** - Store master data
-- id (integer, primary key)
-- name (text) - Store name
-- code (text) - Store code
-- status (integer) - 1=active, 0=inactive
-- location (text)
-- timezone (text)
+{instructions}
 
-**items** - Product catalog
-- id (integer, primary key)
-- pcode (text) - Product code/barcode
-- description (text) - Product description
-- short_description1 (text)
-- type (integer)
-- status (integer) - 1=active, 0=inactive
+**Context:**
+- Current Date: {datetime.now().date()}
+- Schema: {Config.DB_SCHEMA}
 
-**da_stores_date** - Daily sales by store (partitioned by year)
-- store_id (integer, FK → stores.id)
-- date (date)
-- nr_sales (integer) - Number of transactions
-- nr_persons (integer) - Number of customers
-- total_quantity (numeric) - Total items sold
-- total_net (numeric) - Revenue without VAT
-- total_doc (numeric) - Revenue with VAT
-- total_discount (numeric) - Total discounts
-- nr_credits (integer) - Number of returns
-- credits_total_net (numeric) - Returns amount
-
-**da_items_stores_date** - Daily sales by product+store (partitioned by month)
-- item_id (integer, FK → items.id)
-- store_id (integer, FK → stores.id)
-- date (date)
-- total_quantity (numeric) - Quantity sold
-- total_net (numeric) - Revenue without VAT
-- total_price (numeric) - Revenue with VAT
-- total_discount (numeric) - Discounts
-- latest_price_cost (numeric) - Unit cost
-- price_average_cost (numeric) - Average cost
-
-**CRITICAL RULES:**
-1. ALWAYS start with: SET search_path TO {Config.DB_SCHEMA};
-2. Only generate SELECT queries (read-only)
-3. Join tables properly:
-   - stores ↔ da_stores_date: stores.id = da_stores_date.store_id
-   - stores ↔ da_items_stores_date: stores.id = da_items_stores_date.store_id
-   - items ↔ da_items_stores_date: items.id = da_items_stores_date.item_id
-4. Filter active stores: WHERE stores.status = 1
-5. Current date reference: CURRENT_DATE
-6. Portuguese context:
-   - "hoje" = today = CURRENT_DATE
-   - "ontem" = yesterday = CURRENT_DATE - INTERVAL '1 day'
-   - "esta semana" = this week
-   - "este mês" = this month
-   - "este ano" = this year
-7. Easter 2025: April 18-20 ('2025-04-18' to '2025-04-20')
-8. Christmas: December 24-25
-9. Margin calculation: total_net - (total_quantity * latest_price_cost)
-10. Always use numeric precision for money (ROUND to 2 decimals)
-
-Current date: {datetime.now().date()}
-
-Return ONLY the SQL query, no explanations or markdown.
+**Output Format:**
+Return ONLY the SQL query. No explanations, no markdown, no code blocks.
 """
 
     try:
@@ -201,7 +163,7 @@ Return ONLY the SQL query, no explanations or markdown.
 # LLM Integration - Ollama (Local)
 # ============================================================================
 
-def ollama_text_to_sql(question: str) -> str:
+def ollama_text_to_sql(question: str, model: str = None) -> str:
     """Convert natural language to SQL using Ollama (local LLM)"""
 
     try:
@@ -209,24 +171,27 @@ def ollama_text_to_sql(question: str) -> str:
     except ImportError:
         st.error("requests package not installed. Run: pip install requests")
         st.stop()
+    
+    # Use provided model or default from config
+    model = model or Config.OLLAMA_MODEL
+    # SIMPLIFIED PROMPT FOR LOCAL MODELS
+    # Explicitly forbid CTEs to avoid scoping errors
+    instructions = get_ai_instructions()
+    
+    prompt = f"""You are a PostgreSQL expert. Convert this question to SQL.
 
-    # Simplified prompt for local LLM
-    prompt = f"""You are a SQL expert. Convert this question to a PostgreSQL query.
+{instructions}
 
-Database has these tables:
-- stores (id, name, status)
-- items (id, pcode, description)
-- da_stores_date (store_id, date, total_net, nr_sales)
-- da_items_stores_date (item_id, store_id, date, total_quantity, total_net, latest_price_cost)
+**Question:** {question}
 
-Question: {question}
+**Additional Rules for Local Models:**
+- DO NOT use WITH clauses (CTEs) - use simple JOINs instead
+- DO NOT use complex subqueries - keep queries simple
+- Use standard aggregation (SUM, COUNT, AVG)
+- Current Date: {datetime.now().date()}
+- Schema: {Config.DB_SCHEMA}
 
-Rules:
-- Start with: SET search_path TO {Config.DB_SCHEMA};
-- Only SELECT queries
-- Use CURRENT_DATE for "today"
-- Join stores.id = da_stores_date.store_id
-- Return ONLY the SQL, no explanation
+Return ONLY the SQL query. No explanations.
 
 SQL:"""
 
@@ -234,26 +199,52 @@ SQL:"""
         response = requests.post(
             f"{Config.OLLAMA_HOST}/api/generate",
             json={
-                "model": Config.OLLAMA_MODEL,
+                "model": model,
                 "prompt": prompt,
                 "stream": False
             },
-            timeout=30
+            timeout=120
         )
-
-        if response.status_code != 200:
-            raise Exception(f"Ollama API error: {response.status_code}")
-
+        response.raise_for_status()
         result = response.json()
-        sql = result.get("response", "").strip()
+        raw_sql = result.get("response", "").strip()
 
-        # Clean up
-        if sql.startswith("```sql"):
-            sql = sql.replace("```sql", "").replace("```", "").strip()
-        elif sql.startswith("```"):
-            sql = sql.replace("```", "").strip()
+        # --- Robust SQL Extraction ---
+        # 1. Try to find markdown code blocks first ( ```sql ... ``` or ``` ... ``` )
+        # Using string methods for simplicity/safety without risking regex complexity issues on imports
+        sql = raw_sql
+        
+        if "```" in raw_sql:
+            parts = raw_sql.split("```")
+            # Usually the SQL is in the first block (index 1)
+            if len(parts) >= 3:
+                block_content = parts[1]
+                if block_content.lower().startswith("sql"):
+                    sql = block_content[3:].strip()
+                else:
+                    sql = block_content.strip()
+        
+        # 2. If no valid SQL found in blocks (or if block was just "sql"), 
+        # look for explicit start commands in the raw or extracted text
+        # Because local models chatter: "Here is the query: SELECT ..."
+        
+        # We look for "SELECT" or "SET" (case insensitive)
+        sql_upper = sql.upper()
+        if "SET SEARCH_PATH" in sql_upper:
+            # Take everything from SET onwards
+            idx = sql_upper.find("SET SEARCH_PATH")
+            sql = sql[idx:]
+        elif "SELECT " in sql_upper:
+            # Take everything from SELECT onwards
+            idx = sql_upper.find("SELECT ")
+            sql = sql[idx:]
+            
+        # 3. Clean up any trailing text (stop at the last semicolon if present)
+        if ";" in sql:
+            last_semi = sql.rfind(";")
+            sql = sql[:last_semi+1]
 
-        return sql
+        return sql.strip()
 
     except requests.exceptions.ConnectionError:
         raise Exception(f"Cannot connect to Ollama at {Config.OLLAMA_HOST}. Is it running?")
@@ -261,11 +252,46 @@ SQL:"""
         raise Exception(f"Ollama error: {str(e)}")
 
 
+def display_results(df: pd.DataFrame):
+    """Display DataFrame with currency formatting and Chart"""
+    
+    # Define currency columns format
+    column_config = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if any(x in col_lower for x in ['net', 'price', 'cost', 'margin', 'total', 'revenue']):
+            # It's likely a monetary value
+            if 'quantity' not in col_lower and 'nr_' not in col_lower:
+                column_config[col] = st.column_config.NumberColumn(
+                    col,
+                    format="%.2f €"
+                )
+    
+    # Display Table with formatting
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config=column_config
+    )
+    
+    # Display Chart
+    if len(df) > 0 and len(df) <= 50:
+        numeric_cols = df.select_dtypes(include=['number']).columns
+        if len(numeric_cols) > 0:
+            with st.expander("📈 Chart", expanded=True):
+                if len(df.columns) >= 2 and df.iloc[:, 0].dtype == 'object':
+                    st.bar_chart(df.set_index(df.columns[0]))
+                else:
+                    st.line_chart(df[numeric_cols])
+
+
 # ============================================================================
 # Main Text-to-SQL Function
 # ============================================================================
 
-def text_to_sql(question: str, provider: str = None) -> str:
+@st.cache_data(ttl=3600, show_spinner=False)
+def text_to_sql(question: str, provider: str = None, model: str = None) -> str:
     """Convert natural language to SQL using selected provider"""
 
     provider = provider or Config.LLM_PROVIDER
@@ -273,7 +299,7 @@ def text_to_sql(question: str, provider: str = None) -> str:
     if provider == "claude":
         return claude_text_to_sql(question)
     elif provider == "ollama":
-        return ollama_text_to_sql(question)
+        return ollama_text_to_sql(question, model=model)
     else:
         raise ValueError(f"Unknown LLM provider: {provider}")
 
@@ -299,18 +325,47 @@ def main():
         st.markdown("---")
         st.markdown("### Settings")
 
-        # LLM Provider Selection
-        provider = st.radio(
-            "LLM Provider",
-            options=["claude", "ollama"],
-            index=0 if Config.LLM_PROVIDER == "claude" else 1,
-            help="Claude API (cloud, best) or Ollama (local, private)"
+        # Mode Selection
+        mode = st.radio(
+            "Mode",
+            options=["Single Provider", "Compare (Cloud vs Local)"],
+            index=0,
+            help="Compare results between Claude (Cloud) and Ollama (Local)"
         )
 
-        if provider == "claude":
-            st.info("🌐 Using Claude Sonnet 4.5 via OpenRouter")
+        provider = "claude" # Default for single mode
+        ollama_model = Config.OLLAMA_MODEL
+
+        if mode == "Single Provider":
+            # LLM Provider Selection
+            provider = st.radio(
+                "LLM Provider",
+                options=["claude", "ollama"],
+                index=0 if Config.LLM_PROVIDER == "claude" else 1,
+                help="Claude API (cloud, best) or Ollama (local, private)"
+            )
+
+            if provider == "claude":
+                st.info("🌐 Using Claude Sonnet 4.5 via OpenRouter")
+            else:
+                st.info(f"🏠 Using Ollama local at {Config.OLLAMA_HOST}")
+                
+                # Ollama Model Selection (for Single Mode)
+                ollama_model = st.selectbox(
+                    "Ollama Model",
+                    options=["qwen3-textsql", "qwen3:14b", "deepseek-r1:14b", Config.OLLAMA_MODEL],
+                    index=2
+                )
         else:
-            st.info(f"🏠 Using Ollama local at {Config.OLLAMA_HOST}")
+            # Compare Mode Settings
+            st.info("⚔️ Comparing Claude Sonnet 4.5 vs Local Model")
+            
+            # Ollama Model Selection (for Compare Mode)
+            ollama_model = st.selectbox(
+                "Select Local Model",
+                options=["qwen3-textsql", "qwen3:14b", "deepseek-r1:14b", Config.OLLAMA_MODEL],
+                index=0
+            )
 
         st.markdown("---")
         st.markdown("### Example Questions")
@@ -322,6 +377,29 @@ def main():
         - Sales comparison vs last year
         - How much during Easter?
         """)
+
+        st.markdown("---")
+        with st.expander("🧠 AI Context / Instructions"):
+            st.caption("Edit the 'Brain' (Schema & Rules). Changes apply instantly.")
+            
+            # Load current instructions
+            current_instructions = get_ai_instructions()
+            
+            # Text Area for editing
+            new_instructions = st.text_area(
+                "Instructions",
+                value=current_instructions,
+                height=300,
+                key="ai_instructions_editor",
+                help="Define tables, business logic (margin formula), and terms here."
+            )
+            
+            if st.button("💾 Save Instructions"):
+                with open("instructions.md", "w") as f:
+                    f.write(new_instructions)
+                st.success("Saved!")
+                # Force reload of cache to pick up new instructions
+                text_to_sql.clear()
 
         st.markdown("---")
         st.markdown("### Database Info")
@@ -339,81 +417,104 @@ def main():
     # Main content
     st.title("Ask Anything About Your Sales")
 
-    # Question input
-    question = st.text_input(
-        "Your question:",
-        placeholder="e.g., How much did I sell today?",
-        help="Ask in English or Portuguese"
-    )
+    # Session State Initialization
+    if "question_input" not in st.session_state:
+        st.session_state.question_input = ""
+    if "processing" not in st.session_state:
+        st.session_state.processing = False
 
-    # Example buttons
+    # Example buttons (Update session state via callback)
+    def set_question(q):
+        st.session_state.question_input = q
+        st.session_state.processing = True
+
     col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button("📅 Today's Sales"):
-            question = "How much did I sell today by store?"
+        st.button("📅 Today's Sales", on_click=set_question, args=("How much did I sell today by store?",))
     with col2:
-        if st.button("🏆 Top Products"):
-            question = "Top 10 products by revenue this month"
+        st.button("🏆 Top Products", on_click=set_question, args=("Top 10 products by revenue this month",))
     with col3:
-        if st.button("📊 YoY Comparison"):
-            question = "Sales comparison this year vs last year by month"
+        st.button("📊 YoY Comparison", on_click=set_question, args=("Sales comparison this year vs last year by month",))
 
-    if question:
-        with st.spinner("Thinking..."):
-            try:
-                # Generate SQL
-                sql = text_to_sql(question, provider=provider)
+    # Main Input Form
+    with st.form("query_form"):
+        # Key 'question_input' binds directly to st.session_state.question_input
+        st.text_input(
+            "Your question:",
+            key="question_input",
+            placeholder="e.g., How much did I sell today?",
+            help="Ask in English or Portuguese"
+        )
+        submitted = st.form_submit_button("🚀 Run Analysis")
+    
+    # Execution Logic
+    # Run if submitted OR if 'processing' flag was set by a button
+    if submitted or st.session_state.processing:
+        # Reset processing flag so it doesn't loop forever
+        st.session_state.processing = False
+        
+        question = st.session_state.question_input
+        
+        # ... logic continues below (uses 'question' variable)
+        if mode == "Single Provider":
+            # Existing Single Provider Logic
+            with st.spinner("Thinking..."):
+                try:
+                    # Generate SQL
+                    sql = text_to_sql(question, provider=provider, model=ollama_model)  # Pass model
 
-                # Display generated SQL
-                with st.expander("🔍 Generated SQL", expanded=False):
-                    st.code(sql, language="sql")
+                    # Display generated SQL
+                    with st.expander("🔍 Generated SQL", expanded=False):
+                        st.code(sql, language="sql")
 
-                # Execute query
-                df = execute_query(sql)
+                    # Execute query
+                    df = execute_query(sql)
 
-                # Display results
-                st.success(f"Found {len(df)} results")
+                    # Display results
+                    st.success(f"Found {len(df)} results")
 
-                # Show as table
-                st.dataframe(
-                    df,
-                    use_container_width=True,
-                    hide_index=True
-                )
+                    # Show as table and chart
+                    display_results(df)
 
-                # Download button
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    label="📥 Download CSV",
-                    data=csv,
-                    file_name=f"storesace_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
-
-                # Try to show chart if numeric data
-                if len(df) > 0 and len(df) <= 50:  # Don't chart huge datasets
-                    numeric_cols = df.select_dtypes(include=['number']).columns
-                    if len(numeric_cols) > 0:
-                        with st.expander("📈 Chart", expanded=True):
-                            # Auto-detect best chart type
-                            if len(df.columns) >= 2:
-                                # Bar chart if first col is text, second is numeric
-                                if df.iloc[:, 0].dtype == 'object' and df.iloc[:, 1].dtype in ['int64', 'float64']:
-                                    st.bar_chart(df.set_index(df.columns[0]))
-                                else:
-                                    st.line_chart(df[numeric_cols])
-                            else:
-                                st.line_chart(df[numeric_cols])
-
-            except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
-
-                if Config.DEBUG:
-                    st.exception(e)
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+                    if Config.DEBUG:
+                        st.exception(e)
+        
+        else:
+            # Compare Mode Logic
+            st.write("---")
+            col_claude, col_ollama = st.columns(2)
+            
+            with col_claude:
+                st.subheader("🌐 Claude (Cloud)")
+                st.caption("Sonnet 4.5")
+                with st.spinner("Claude is thinking..."):
+                    try:
+                        sql_c = text_to_sql(question, provider="claude")
+                        st.code(sql_c, language="sql")
+                        df_c = execute_query(sql_c)
+                        st.success(f"✓ {len(df_c)} rows")
+                        display_results(df_c)
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+                
+            with col_ollama:
+                st.subheader("🏠 Ollama (Local)")
+                st.caption(f"Model: {ollama_model}")
+                with st.spinner(f"Local {ollama_model} is thinking..."):
+                    try:
+                        sql_o = text_to_sql(question, provider="ollama", model=ollama_model)
+                        st.code(sql_o, language="sql")
+                        df_o = execute_query(sql_o)
+                        st.success(f"✓ {len(df_o)} rows")
+                        display_results(df_o)
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
 
     # Footer
     st.markdown("---")
-    st.caption(f"Powered by {provider.title()} • {datetime.now().year}")
+    st.caption(f"Powered by StoreSace Analytics • {datetime.now().year}")
 
 
 if __name__ == "__main__":
