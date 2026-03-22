@@ -13,13 +13,15 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./DUMP:/docker-entrypoint-initdb.d/dumps:ro
+      - ./DUMP:/dumps:ro
+      - ./init/00-schema.sql:/docker-entrypoint-initdb.d/00-schema.sql:ro
+      - ./init/01-import.sh:/docker-entrypoint-initdb.d/01-import.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U storesace -d storesace"]
       interval: 5s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
+    # restart: unless-stopped
 
   streamlit:
     build: .
@@ -31,28 +33,29 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    restart: unless-stopped
+    # restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./app.py:/app/app.py:ro
+      - ./agents.py:/app/agents.py:ro
       - ./instructions.md:/app/instructions.md:ro
 
   # Optional: pgAdmin for database management
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: storesace_pgadmin
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@storesace.local
-      PGADMIN_DEFAULT_PASSWORD: admin
-      PGADMIN_CONFIG_SERVER_MODE: 'False'
-    ports:
-      - "5050:80"
-    depends_on:
-      - postgres
-    restart: unless-stopped
-    profiles:
-      - admin
+  # pgadmin:
+  #   image: dpage/pgadmin4:latest
+  #   container_name: storesace_pgadmin
+  #   environment:
+  #     PGADMIN_DEFAULT_EMAIL: admin@storesace.local
+  #     PGADMIN_DEFAULT_PASSWORD: admin
+  #     PGADMIN_CONFIG_SERVER_MODE: 'False'
+  #   ports:
+  #     - "5050:80"
+  #   depends_on:
+  #     - postgres
+  #   restart: unless-stopped
+  #   profiles:
+  #     - admin
 
 volumes:
   postgres_data:

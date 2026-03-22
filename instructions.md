@@ -349,6 +349,171 @@ Primary lookups are already indexed:
 
 ---
 
+## Portuguese Calendar & Key Retail Dates
+
+### National Holidays (Fixed)
+| Date | Holiday |
+|------|---------|
+| Jan 1 | Ano Novo (New Year's Day) |
+| Apr 25 | Dia da Liberdade (Freedom Day) |
+| May 1 | Dia do Trabalhador (Labour Day) |
+| Jun 10 | Dia de Portugal |
+| Aug 15 | Assunção de Nossa Senhora (Assumption) |
+| Oct 5 | Implantação da República |
+| Nov 1 | Dia de Todos os Santos (All Saints) |
+| Dec 1 | Restauração da Independência |
+| Dec 8 | Imaculada Conceição |
+| Dec 25 | Natal (Christmas) |
+
+### Easter Dates (Moveable - with Carnival & Corpus Christi)
+| Year | Carnival (47 days before Easter) | Good Friday | Easter Sunday | Corpus Christi (60 days after Easter) |
+|------|----------------------------------|-------------|---------------|---------------------------------------|
+| 2020 | Feb 25 | Apr 10 | Apr 12 | Jun 11 |
+| 2021 | Feb 16 | Apr 2 | Apr 4 | Jun 3 |
+| 2022 | Mar 1 | Apr 15 | Apr 17 | Jun 16 |
+| 2023 | Feb 21 | Apr 7 | Apr 9 | Jun 8 |
+| 2024 | Feb 13 | Mar 29 | Mar 31 | May 30 |
+| 2025 | Mar 4 | Apr 18 | Apr 20 | Jun 19 |
+
+### Regional Events (Northern Portugal — Poupeuro territory)
+| Event | City | Typical Dates | Sales Impact |
+|-------|------|---------------|-------------|
+| São João | Porto, Braga | June 23-24 | HIGH — major street festival, peak foot traffic |
+| Festas Gualterianas | Guimarães | First weekend of August | MEDIUM — regional fair |
+| Romaria de São Bartolomeu | Ponte de Lima | August 19-24 | MEDIUM — attracts regional visitors |
+| Feira de São Mateus | Viseu | August-September | LOW (outside core territory) |
+| Back to School | All stores | September 1-15 | HIGH — school supplies spike |
+| Black Friday | All stores | Last Friday of November | HIGH — discount retail peak |
+| Christmas Season | All stores | December 1-24 | HIGHEST — peak sales period |
+
+### Key Retail Periods for Analysis
+```sql
+-- Easter week (Good Friday to Easter Monday)
+-- Use the Easter dates table above for each year
+
+-- São João (Porto/Braga peak)
+WHERE date BETWEEN 'YYYY-06-20' AND 'YYYY-06-25'
+
+-- Back to School
+WHERE date BETWEEN 'YYYY-09-01' AND 'YYYY-09-15'
+
+-- Black Friday week
+WHERE date BETWEEN 'YYYY-11-25' AND 'YYYY-12-01'
+
+-- Christmas Season
+WHERE date BETWEEN 'YYYY-12-01' AND 'YYYY-12-24'
+```
+
+---
+
+## Competitor Context
+
+Poupeuro operates in the discount variety retail segment in Northern Portugal. Key competitors:
+
+| Competitor | Type | Presence in Portugal | Notes |
+|-----------|------|---------------------|-------|
+| **Action** | Dutch discount variety | Expanding aggressively since 2022, 50+ stores by 2025 | Direct competitor, very low prices, non-food focus |
+| **PrimaPrix** | Spanish discount variety | ~20 stores, mostly Lisbon/Porto areas | Branded overstock model, food + non-food |
+| **Mercadona** | Spanish supermarket | 50+ stores since 2019 entry | Food-focused but private label strategy overlaps |
+| **Lidl** | German discount supermarket | 270+ stores nationwide | Non-food "Bazaar" aisle competes directly |
+| **Pingo Doce** | Portuguese supermarket | 450+ stores | Jerónimo Martins group, aggressive promos |
+| **Continente** | Portuguese hypermarket | 300+ stores (Sonae group) | Broad range, loyalty program |
+| **IKEA** | Swedish home/furniture | 5 stores + online | Competes in home/decor segment |
+| **Primark** | Irish fast fashion | 10+ stores | Competes in apparel/accessories segment |
+
+### Competitive Analysis Queries
+When users ask about competitors or competitive positioning:
+1. Use **search_web** or **ask_perplexity** for current competitor news
+2. Cross-reference with internal sales data for the same period/category
+3. Look for correlation: did our sales dip when a competitor opened nearby?
+
+---
+
+## Like-for-Like (LFL) Comparison Rules
+
+Like-for-Like (LFL / Comparable Store Sales) compares only stores that were active in BOTH periods. This is critical for fair YoY comparisons when stores open or close.
+
+### LFL SQL Pattern
+```sql
+-- Step 1: Find stores active in BOTH periods using INTERSECT
+-- Step 2: Filter both periods to only those stores
+
+-- Example: LFL comparison December 2024 vs December 2025
+SET search_path TO prod_515383678;
+
+WITH lfl_stores AS (
+    SELECT DISTINCT store_id FROM da_stores_date
+    WHERE date >= '2024-12-01' AND date < '2025-01-01'
+    INTERSECT
+    SELECT DISTINCT store_id FROM da_stores_date
+    WHERE date >= '2025-12-01' AND date < '2026-01-01'
+)
+SELECT
+    s.name,
+    SUM(CASE WHEN d.date >= '2024-12-01' AND d.date < '2025-01-01'
+        THEN d.total_net ELSE 0 END) AS revenue_2024,
+    SUM(CASE WHEN d.date >= '2025-12-01' AND d.date < '2026-01-01'
+        THEN d.total_net ELSE 0 END) AS revenue_2025,
+    ROUND(
+        (SUM(CASE WHEN d.date >= '2025-12-01' AND d.date < '2026-01-01' THEN d.total_net ELSE 0 END) -
+         SUM(CASE WHEN d.date >= '2024-12-01' AND d.date < '2025-01-01' THEN d.total_net ELSE 0 END)) /
+        NULLIF(SUM(CASE WHEN d.date >= '2024-12-01' AND d.date < '2025-01-01' THEN d.total_net ELSE 0 END), 0) * 100,
+        2
+    ) AS lfl_growth_pct
+FROM da_stores_date d
+JOIN stores s ON s.id = d.store_id
+WHERE d.store_id IN (SELECT store_id FROM lfl_stores)
+  AND s.status = 1
+GROUP BY s.name
+ORDER BY lfl_growth_pct DESC;
+```
+
+### When to use LFL:
+- Any year-over-year comparison
+- Any period-over-period comparison where store count may differ
+- User asks about "comparable", "like-for-like", "same-store", or "LFL"
+
+---
+
+## Temporal Correlation — Product Bundle Analysis
+
+To find products frequently bought together (co-occurrence in daily aggregates):
+
+### Pattern: Products sold together on the same day in the same store
+```sql
+SET search_path TO prod_515383678;
+
+-- Find products that co-occur with a target product on same store/day
+WITH target_days AS (
+    SELECT store_id, date
+    FROM da_items_stores_date
+    WHERE item_id = :target_item_id
+      AND date >= '2025-06-01' AND date < '2025-09-01'
+      AND total_quantity > 0
+)
+SELECT
+    i.description,
+    COUNT(DISTINCT (d.store_id, d.date)) AS co_occurrence_days,
+    SUM(d.total_quantity) AS total_qty,
+    SUM(d.total_net) AS total_revenue
+FROM da_items_stores_date d
+JOIN items i ON i.id = d.item_id
+JOIN target_days td ON td.store_id = d.store_id AND td.date = d.date
+WHERE d.item_id != :target_item_id
+  AND d.total_quantity > 0
+GROUP BY i.id, i.description
+ORDER BY co_occurrence_days DESC
+LIMIT 20;
+```
+
+### Seasonal Bundle Discovery
+For finding seasonal product bundles (e.g., summer products):
+1. Identify products with strong seasonal peaks (high summer vs winter ratio)
+2. Find co-occurring products in peak season
+3. Suggest bundles based on co-occurrence frequency
+
+---
+
 ## Query Validation Checklist
 
 Before returning a query, verify:
